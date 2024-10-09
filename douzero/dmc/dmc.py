@@ -40,7 +40,6 @@ def learn(position,
     target = torch.flatten(batch['target'].to(device), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
     mean_episode_return_buf[position].append(torch.mean(episode_returns).to(device))
-        
     with lock:
         learner_outputs = model(obs_z, obs_x, return_value=True)
         loss = compute_loss(learner_outputs['values'], target)
@@ -144,7 +143,7 @@ def train(flags):
     # Starting actor processes
     for device in device_iterator:
         num_actors = flags.num_actors
-        for i in range(flags.num_actors):
+        for i in range(num_actors):
             actor = ctx.Process(
                 target=act,
                 args=(i, device, free_queue[device], full_queue[device], models[device], buffers[device], flags))
@@ -217,7 +216,7 @@ def train(flags):
             position_start_frames = {k: position_frames[k] for k in position_frames}
             start_time = timer()
             time.sleep(5)
-
+            # 30 minutes save interval
             if timer() - last_checkpoint_time > flags.save_interval * 60:  
                 checkpoint(frames)
                 last_checkpoint_time = timer()

@@ -12,6 +12,7 @@ from torch import multiprocessing as mp
 from .env_utils import Environment
 from douzero.env import Env
 from douzero.env.env import _cards2array
+from douzero.cmi.cmi import estimate_cmi
 
 Card2Column = {3: 0, 4: 1, 5: 2, 6: 3, 7: 4, 8: 5, 9: 6, 10: 7,
                11: 8, 12: 9, 13: 10, 14: 11, 17: 12}
@@ -120,7 +121,7 @@ def act(i, device, free_queue, full_queue, model, buffers, flags):
 
         env = create_env(flags)
         env = Environment(env, device)
-
+        # maintain data in episodes
         done_buf = {p: [] for p in positions}
         episode_return_buf = {p: [] for p in positions}
         target_buf = {p: [] for p in positions}
@@ -130,8 +131,21 @@ def act(i, device, free_queue, full_queue, model, buffers, flags):
         size = {p: 0 for p in positions}
 
         position, obs, env_output = env.initial()
+        # data = {
+        #     'legal_actions_for_latter': [],
+        #     'state': [],
+        #     'action_former': [],
+        #     'action_latter': []
+        # }
+        # cmi_data = []
+        cmi_joint_data = []
+        
 
         while True:
+            peasant_actions = []
+            state = []
+            pass_times = 0
+            legal_action = []
             while True:
                 obs_x_no_action_buf[position].append(env_output['obs_x_no_action'])
                 obs_z_buf[position].append(env_output['obs_z'])
@@ -141,9 +155,46 @@ def act(i, device, free_queue, full_queue, model, buffers, flags):
                 action = obs['legal_actions'][_action_idx]
                 obs_action_buf[position].append(_cards2tensor(action))
                 size[position] += 1
+                pass_times = pass_times + 1 if len(action) == 0 else 0
+                # [L, D, U], [L, D, U, L], [D, U, L, D], [L, D, U, L, D], [U, L, D]
+                if position != 'landlord':
+                    peasant_actions.append(action)
+                    state.append(env_output['obs_z'])
+                    legal_action.append(obs['legal_actions'])
+                    legal_action = legal_action[-1:]
+                    if len(peasant_actions) >= 2:
+                        peasant_actions = peasant_actions[-2:]
+                        state = state[-2:]
+                        cmi_joint_data.append({
+                            'value': [peasant_actions[-1], peasant_actions[0], state[0]],
+                            'legal_actions': legal_action
+                        })
+                if pass_times == 2:
+                    peasant_actions = []
+                    legal_action = []
+                    state = []
+
                 position, obs, env_output = env.step(action)
+                
+
+                # if not env_output['done'] or (env_output['done'] and position != 'landlord_down'):
+                # # collect data for CMI
+                #     if position != 'landlord' and (size[position] > 0 or position == 'landlord_up'):
+                #         data['legal_actions_for_latter'].append([_cards2tensor(legal_action)  for legal_action in obs['legal_actions']])
+                #     if position == 'landlord_down':
+                #         data['state'].append(env_output['obs_z'])
+                #         data['state'].append(env_output['obs_z'])
+                #     else:
+                #         peasant_actions.append(_cards2tensor(action))
+                #         if len(peasant_actions) >= 2:
+                #             peasant_actions = peasant_actions[-2:]
+                #             data['action_former'].append(peasant_actions[0])
+                #             data['action_latter'].append(peasant_actions[1])
+                
                 if env_output['done']:
+                    total_steps = 0
                     for p in positions:
+                        # total_steps += size[p]
                         diff = size[p] - len(target_buf[p])
                         if diff > 0:
                             done_buf[p].extend([False for _ in range(diff-1)])
@@ -153,6 +204,27 @@ def act(i, device, free_queue, full_queue, model, buffers, flags):
                             episode_return_buf[p].extend([0.0 for _ in range(diff-1)])
                             episode_return_buf[p].append(episode_return)
                             target_buf[p].extend([episode_return for _ in range(diff)])
+
+                    # total_steps = total_steps - 1
+                    # cmi_data_length = total_steps // 3
+                    # remain = total_steps % 3
+                    # if remain == 0:
+                    #     cmi_data_length = 2 * cmi_data_length - 1
+                    # elif remain == 1:
+                    #     cmi_data_length = 2 * cmi_data_length
+                    # else:
+                    #     cmi_data_length = 2 * cmi_data_length + 1
+                    # data['state'] = data['state'][:cmi_data_length]
+                    # data['action_former'] = data['action_former'][:cmi_data_length]
+                    # data['action_latter'] = data['action_latter'][:cmi_data_length]
+                    # data['legal_actions_for_latter'] = data['legal_actions_for_latter'][:cmi_data_length]
+
+                    # for i in range(cmi_data_length):
+                    #     cmi_data.append({
+                    #         'value': [data['action_latter'][i], data['action_former'][i], data['state'][i]],
+                    #         'legal_actions': data['legal_actions_for_latter'][i]
+                    #     })
+                    # 获得了一个episode的CMI相关数据
                     break
 
             for p in positions:
